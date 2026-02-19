@@ -19,7 +19,7 @@ jobs:
 
           # Remove any existing rule with the same name
           netsh advfirewall firewall delete rule name="RDP-Tailscale"
-           
+            
           # Allow incoming connection on port 3389
           netsh advfirewall firewall add rule name="RDP-Tailscale" `
             dir=in action=allow protocol=TCP localport=3389
@@ -27,10 +27,26 @@ jobs:
           # Restart the service
           Restart-Service -Name TermService -Force
 
+      - name: Optimize RDP for OBS and Graphics
+        run: |
+          $path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
+          if (-not (Test-Path $path)) { New-Item -Path $path -Force }
+          
+          # Force hardware graphics adapter for RDP sessions
+          New-ItemProperty -Path $path -Name "bEnforceHardwareGraphics" -Value 1 -PropertyType DWord -Force
+          # Enable WDDM display driver (much better for OBS)
+          New-ItemProperty -Path $path -Name "fEnableWddmDriver" -Value 1 -PropertyType DWord -Force
+          # Enable H.264 encoding for smoother remote visuals
+          New-ItemProperty -Path $path -Name "fEnableH264" -Value 1 -PropertyType DWord -Force
+
+          # Create a Safe-Disconnect script on the Public Desktop
+          # This kicks the session to the console instead of locking the GUI, keeping OBS alive.
+          $batContent = 'for /f "skip=1 tokens=3" %%s in (''query user %USERNAME%'') do (%windir%\System32\tscon.exe %%s /dest:console)'
+          Set-Content -Path "C:\Users\Public\Desktop\Keep_OBS_Alive_Disconnect.bat" -Value $batContent
+
       - name: Create RDP User with Custom Password
         run: |
           # --- CUSTOM PASSWORD SETTING ---
-          # Using single quotes to safely handle special characters like $
           $password = 'wmth2008WM!@#$%'
           # -----------------------------
 
@@ -38,11 +54,10 @@ jobs:
           New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member "RDP"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
-           
-          # Mask the password in logs just in case, though echo prints it to env
+            
           echo "::add-mask::$password"
           echo "RDP_CREDS=User: RDP | Password: $password" >> $env:GITHUB_ENV
-           
+            
           if (-not (Get-LocalUser -Name "RDP")) {
               Write-Error "User creation failed"
               exit 1
@@ -52,7 +67,7 @@ jobs:
         run: |
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
           $installerPath = "$env:TEMP\tailscale.msi"
-           
+            
           Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
           Remove-Item $installerPath -Force
@@ -60,7 +75,7 @@ jobs:
       - name: Establish Tailscale Connection
         run: |
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
-           
+            
           $tsIP = $null
           $retries = 0
           while (-not $tsIP -and $retries -lt 10) {
@@ -68,13 +83,13 @@ jobs:
               Start-Sleep -Seconds 5
               $retries++
           }
-           
+            
           if (-not $tsIP) {
               Write-Error "Tailscale IP not assigned. Exiting."
               exit 1
           }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-       
+        
       - name: Verify RDP Accessibility
         run: |
           Write-Host "Tailscale IP: $env:TAILSCALE_IP"
@@ -90,10 +105,9 @@ jobs:
           Write-Host "`n=== RDP ACCESS ==="
           Write-Host "Address: $env:TAILSCALE_IP"
           Write-Host "Username: RDP"
-          # Displaying password explicitly as requested
           Write-Host "Password: wmth2008WM!@#$%"
           Write-Host "==================`n"
-           
+            
           while ($true) {
               Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
               Start-Sleep -Seconds 300
